@@ -169,6 +169,42 @@ node dist/amex-helper.mjs \
 - `all_mr_{yyyymmdd}.csv`
 - `all_benefits_{yyyymmdd}.csv`
 
+Balance CSV：
+
+```csv
+card,op date,limit,available,st day,st date,st balance,remaining,total balance,pending,final balance,isDue,min due amount,due date,next st date,next due amount,next due date,,card ending,description,account_token,account_key,embossed_name
+```
+
+字段说明：
+
+| 字段 | 说明 |
+| --- | --- |
+| `card` | 卡片名称，格式为 `{index}_{product_prefix}_{card_ending}`。 |
+| `op date` | 开卡日期，来自卡片 `status.account_setup_date`。 |
+| `limit` | 信用额度；No Preset Spending Limit 卡显示 `unlimited`。 |
+| `available` | 可用额度；No Preset Spending Limit 卡显示 `unlimited`。 |
+| `st day` | 最近账单日的日期数字，例如 `15.`。 |
+| `st date` | 最近账单日期。 |
+| `st balance` | 最近一期 statement balance。 |
+| `remaining` | 最近一期账单剩余未还金额。 |
+| `total balance` | 当前账单余额，来自 `balances[0].statementBalanceAmount.amount`。 |
+| `pending` | Pending 且 Debit 交易金额之和。 |
+| `final balance` | `total balance + pending`。 |
+| `isDue` | 当前是否有到期付款要求。 |
+| `min due amount` | 最低应还金额。 |
+| `due date` | 当前付款到期日。 |
+| `next st date` | 下一账单日。 |
+| `next due amount` | `final balance - remaining`，用于估算下一期应还金额。 |
+| `next due date` | 下一账单日后 25 天。 |
+| 空字段 | 分隔列，便于把余额字段和卡片元数据分开。 |
+| `card ending` | 卡片尾号。 |
+| `description` | 卡片产品名称。 |
+| `account_token` | Amex account token。 |
+| `account_key` | Amex account key。 |
+| `embossed_name` | 卡面姓名。 |
+
+Balance CSV 最后一行为 `total`。金额字段保留 2 位小数；如果任一卡片为 `unlimited`，`limit` 和 `available` 汇总显示为非 `unlimited` 数值之和加 `+unlimited`。
+
 MR CSV：
 
 ```csv
