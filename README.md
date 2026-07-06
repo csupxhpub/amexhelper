@@ -211,11 +211,50 @@ MR CSV：
 acc no,cards,mr account,earned,redeemed,35% redeem left,pending,balance
 ```
 
+字段说明：
+
+| 字段 | 说明 |
+| --- | --- |
+| `acc no` | MR 账户编号，格式为 `{index}_{序号}`，序号从 `00` 开始。 |
+| `cards` | 该 MR 账户下的 Business Platinum 卡，格式为 `{card}_{airline code}`；多张卡用换行分隔。 |
+| `mr account` | MR 账号。 |
+| `earned` | 已获得积分，来自 `categories.loyaltyBalances.earned.value`。 |
+| `redeemed` | 已使用积分，来自 `categories.loyaltyBalances.used.value`。 |
+| `35% redeem left` | Business Platinum 35% Pay With Points 年度返还剩余额度，按 `1000000 * 100 / 35 - redeemed` 估算，最小为 `0`。 |
+| `pending` | Pending 积分，来自 `categories.loyaltyBalances.pending.value`。 |
+| `balance` | 当前可用积分，来自 `categories.loyaltyBalances.available.value`；API 无明细时回退到 traveler 中的积分余额。 |
+
+MR CSV 最后一行为 `total`，汇总 `earned`、`pending` 和 `balance`。没有 Business Platinum 卡时，`cards` 显示 `NA`；Business Platinum 未登记航司时，`airline code` 显示 `NULL`。
+
 Benefits CSV：
 
 ```csv
 acc no,card,card ending,product,benefit id,benefit name,category,period,status,used amount,total amount,remaining amount,currency,unit,enrollment status,airline code,period start,period end,last updated
 ```
+
+字段说明：
+
+| 字段 | 说明 |
+| --- | --- |
+| `acc no` | Amex Account Index。 |
+| `card` | 卡片名称，格式为 `{index}_{product_prefix}_{card_ending}`。 |
+| `card ending` | 卡片尾号。 |
+| `product` | 卡片产品名称。 |
+| `benefit id` | Benefit 标识，优先使用 tracker 的 `benefitId`。 |
+| `benefit name` | Benefit 名称，优先使用 tracker 的 `benefitName`。 |
+| `category` | Benefit 分类，由 benefit 名称归类，例如 airline、hotel、dell、wireless、generic。 |
+| `period` | Benefit 周期；`CalenderYear` 输出 `Annual`，`Monthly` 输出 `Monthly`，`QuarterYear` 输出 `Quarterly`，`HalfYear` 输出 `Semi-Annual`。 |
+| `status` | 使用状态，统一输出为 `Completed`、`In Progress`、`Not Started` 或 `Unknown`。 |
+| `used amount` | 已使用金额或数量，来自 `tracker.spentAmount`。 |
+| `total amount` | 总额度，来自 `tracker.targetAmount`。 |
+| `remaining amount` | 剩余额度，来自 `tracker.remainingAmount`。 |
+| `currency` | 金额币种，来自 `tracker.targetCurrency`。 |
+| `unit` | 额度单位，来自 `tracker.targetUnit`。 |
+| `enrollment status` | 登记状态，来自 `enrollmentApplication.enrollmentStatus`；不需要登记时显示 `NOT_REQUIRED`。 |
+| `airline code` | 航司类权益的 2 位 IATA 代码；非航司或未登记显示 `NULL`。 |
+| `period start` | Benefit 当前周期开始日期。 |
+| `period end` | Benefit 当前周期结束日期。 |
+| `last updated` | API 返回的更新时间；没有返回时为空。 |
 
 ## 注意事项
 
