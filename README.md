@@ -5,7 +5,7 @@ Amex Helper 用于导出 American Express 卡片余额、Membership Rewards 积�
 本仓库直接使用 `dist/` 下的文件：
 
 - `dist/amex-helper.user.js`：油猴脚本，适合单个已登录 Amex 浏览器会话。
-- `dist/amex-helper.mjs`：HubStudio 批量导出脚本，适用于导出多个 Amex 账号；一个 HubStudio Profile 对应一个 Amex 账号。
+- `dist/amex-data-fetcher.mjs`：HubStudio 批量导出脚本，适用于导出多个 Amex 账号；一个 HubStudio Profile 对应一个 Amex 账号。
 
 ## 油猴脚本
 
@@ -48,18 +48,16 @@ HubStudio Desktop 本地 API 默认为 `http://127.0.0.1:6873`。
 示例：
 
 ```bash
-node dist/amex-helper.mjs \
-  --base-url http://127.0.0.1:6873 \
-  --profile 1474900026=00 \
-  --profile 1474900027=01 \
-  --out ./exports \
-  --keep-open
+node dist/amex-data-fetcher.mjs \
+  --config ./amex-login.local.ini \
+  --mode all \
+  --out ./exports
 ```
 
 只导出 Benefits：
 
 ```bash
-node dist/amex-helper.mjs \
+node dist/amex-data-fetcher.mjs \
   --base-url http://127.0.0.1:6873 \
   --profile 1474900026=00 \
   --profile 1474900027=01 \
@@ -76,14 +74,17 @@ node dist/amex-helper.mjs \
 | --- | --- | --- |
 | `--base-url <url>` | `http://127.0.0.1:6873` | HubStudio Desktop 本地 API 地址，也可用 `HUBSTUDIO_BASE_URL` 指定。 |
 | `--profile <containerCode>=<index>` | 无 | Profile 与 Amex Account Index 的映射；多个 Profile 重复传入。 |
-| `--config <file>` | 无 | 从 JSON 配置读取 Profile 列表；可替代 `--profile`。 |
+| `--config <file>` | 无 | 从共享 INI 或原有 JSON 配置读取 Profile 列表；可替代 `--profile`。 |
 | `--out <dir>` | `./amex_export_{yyyymmdd}` | CSV 输出目录。 |
 | `--mode <mode>` | `all` | 可选 `all`、`balance`、`mr`、`benefits`。 |
 | `--login-timeout-ms <ms>` | `600000` | 等待手工登录或验证的最长时间。 |
 | `--keep-open` | 关闭 | 导出完成后保留 HubStudio 浏览器窗口。 |
+| `--close-on-complete` | 关闭 | 覆盖配置中的 `keep_open = true`，导出后关闭窗口。 |
 | `--help` / `-h` | 无 | 显示帮助。 |
 
-`--config` 示例：
+推荐直接复用 `amex-login.local.ini`。脚本会读取 `[general]` 中的 `base_url`、`login_timeout_ms`、`keep_open`，并处理所有已启用的 `[profile.xx]`。其中的账号密码不会被读取用于数据导出。
+
+原有 JSON `--config` 仍然兼容，例如：
 
 ```json
 {
