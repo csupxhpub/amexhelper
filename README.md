@@ -37,8 +37,7 @@ Amex Helper 用于导出 American Express 卡片余额、Membership Rewards 积�
 
 1. 安装 HubStudio Desktop：`https://www.hubstudio.cn/download/`。
 2. 在 HubStudio 中创建或导入 Profile，一个 Amex 账号对应一个 Profile；在 Profile / 环境列表中查看或复制每个 Profile 的 `containerCode`。
-3. 安装 Node.js 22+：`https://nodejs.org/en/download`。
-4. 运行脚本前保持 HubStudio Desktop 打开。
+3. 运行脚本前保持 HubStudio Desktop 打开。
 
 ### 使用
 
