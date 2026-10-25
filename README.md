@@ -1,6 +1,6 @@
 # Amex Helper
 
-Amex Helper 用于导出 American Express 卡片余额、Membership Rewards 积分和 Benefits 使用状态，输出 CSV 文件。
+Amex Helper 用于导出 American Express 卡片余额、Membership Rewards 积分、Benefits 使用状态及显式日期区间的交易明细，输出 CSV 文件。默认 `all` 仅包含前三类，交易使用独立 `transactions` 模式。
 
 本仓库直接使用 `dist/` 下的文件：
 
@@ -76,7 +76,9 @@ node dist/amex-data-fetcher.mjs \
 | `--profile <containerCode>=<index>` | 无 | Profile 与 Amex Account Index 的映射；多个 Profile 重复传入。 |
 | `--config <file>` | 无 | 从共享 INI 或原有 JSON 配置读取 Profile 列表；可替代 `--profile`。 |
 | `--out <dir>` | `./amex_export_{yyyymmdd}` | CSV 输出目录。 |
-| `--mode <mode>` | `all` | 可选 `all`、`balance`、`mr`、`benefits`。 |
+| `--mode <mode>` | `all` | 可选 `all`、`balance`、`mr`、`benefits`、`transactions`；`all` 不含交易明细。 |
+| `--from` / `--to` | 无 | 交易模式必填，`YYYY-MM-DD` 闭区间。 |
+| `--merchant <name>` | 无 | 可重复的虚拟卡对账提示，不过滤交易明细。 |
 | `--login-timeout-ms <ms>` | `600000` | 等待手工登录或验证的最长时间。 |
 | `--keep-open` | 关闭 | 导出完成后保留 HubStudio 浏览器窗口。 |
 | `--close-on-complete` | 关闭 | 覆盖配置中的 `keep_open = true`，导出后关闭窗口。 |
@@ -151,7 +153,7 @@ Balance CSV 最后一行为 `total`。金额字段保留 2 位小数；如果任
 MR CSV：
 
 ```csv
-acc no,cards,mr account,earned,redeemed,35% redeem left,pending,balance
+acc no,cards,mr account,earned,all redeemed,airlines redeemed,35% redeem left,pending,balance
 ```
 
 字段说明：
@@ -159,15 +161,16 @@ acc no,cards,mr account,earned,redeemed,35% redeem left,pending,balance
 | 字段 | 说明 |
 | --- | --- |
 | `acc no` | MR 账户编号，格式为 `{index}_{序号}`，序号从 `00` 开始。 |
-| `cards` | 该 MR 账户下的 Business Platinum 卡，格式为 `{card}_{airline code}`；多张卡用换行分隔。 |
+| `cards` | 该 MR 账户下的 Business Platinum 卡，格式为 `{card}_{airline code}_{额度}`；额度为 Vitals 的信用额度、`unlimited` 或 `unknown`，多张卡用换行分隔。 |
 | `mr account` | MR 账号。 |
 | `earned` | 已获得积分。 |
-| `redeemed` | 已使用积分。 |
-| `35% redeem left` | Business Platinum 35% Pay With Points 年度返还剩余额度，按 `1000000 * 100 / 35 - redeemed` 估算，最小为 `0`。 |
+| `all redeemed` | Dashboard 的 `loyaltyBalances.used`。 |
+| `airlines redeemed` | `all redeemed - 当年已入账航司转点净额`；名称保留当前 CSV 接口，差额不是精确的合资格机票兑换额。 |
+| `35% redeem left` | `max(0, round(1000000 / 0.35 - airlines redeemed))` 的估计值；转点明细或 token 不可用、分类未知或总额不一致时留空。 |
 | `pending` | Pending 积分。 |
 | `balance` | 当前可用积分。 |
 
-MR CSV 最后一行为 `total`，汇总 `earned`、`pending` 和 `balance`。没有 Business Platinum 卡时，`cards` 显示 `NA`；Business Platinum 未登记航司时，`airline code` 显示 `NULL`。
+MR CSV 最后一行为 `total`，汇总 `earned`、`pending` 和 `balance`。没有 Business Platinum 卡时，`cards` 显示 `NA`；Business Platinum 未登记航司时，`airline code` 显示 `NULL`。航司转点从 `ReadLoyaltyTransactions.v3` 分页读取，只累计当年已入账且属于已知航司的净转点，去重并抵减冲回；详细口径见 [Data Fetcher](skills/amex-data-fetcher/README.md)。
 
 Benefits CSV：
 
@@ -194,7 +197,7 @@ acc no,card,card ending,product,benefit id,benefit name,category,period,status,u
 | `currency` | 金额币种。 |
 | `unit` | 额度单位。 |
 | `enrollment status` | 登记状态；不需要登记时显示 `NOT_REQUIRED`。 |
-| `airline code` | 航司类权益的 2 位 IATA 代码；非航司或未登记显示 `NULL`。 |
+| `airline code` | 仅 Business Platinum 的航司报销权益行输出航司代码，未登记时为 `NULL`；其他权益行留空。 |
 | `period start` | Benefit 当前周期开始日期。 |
 | `period end` | Benefit 当前周期结束日期。 |
 | `last updated` | 更新时间；没有数据时为空。 |
