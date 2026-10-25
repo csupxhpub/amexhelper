@@ -30,6 +30,7 @@ Amex Helper 用于导出 American Express 卡片余额、Membership Rewards 积�
 - `{index}_balance_{yyyymmdd}.csv`
 - `{index}_mr_{yyyymmdd}.csv`
 - `{index}_benefits_{yyyymmdd}.csv`
+- `{index}_transactions_{from}_{to}.csv`：仅显式选择交易日期区间后单独导出。
 
 ## HubStudio 批量导出
 
