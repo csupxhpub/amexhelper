@@ -1,6 +1,6 @@
 # Amex Helper
 
-Amex Helper 用于导出 American Express 卡片余额、Membership Rewards 积分、Benefits 使用状态及显式日期区间的交易明细，输出 CSV 文件。默认 `all` 仅包含前三类，交易使用独立 `transactions` 模式。
+Amex Helper 用于导出 American Express 卡片余额、Membership Rewards 积分、Benefits 使用状态及交易明细，输出 CSV 文件。默认 `all` 仅包含前三类；独立 `transactions` 模式默认年度全量，也支持指定日期区间。
 
 本仓库直接使用 `dist/` 下的文件：
 
@@ -30,7 +30,8 @@ Amex Helper 用于导出 American Express 卡片余额、Membership Rewards 积�
 - `{index}_balance_{yyyymmdd}.csv`
 - `{index}_mr_{yyyymmdd}.csv`
 - `{index}_benefits_{yyyymmdd}.csv`
-- `{index}_transactions_{from}_{to}.csv`：仅显式选择交易日期区间后单独导出。
+- `transactions/{year}/{index}_transactions_{year}.csv`：显式选择交易模式后默认导出当年全量，也可用 `--year` 指定历史年份；验证完成后替换固定年度文件供复用。
+- `transactions/ranges/{index}_transactions_{from}_{to}.csv`：用成对的 `--from`、`--to` 导出特定日期区间，不覆盖年度文件。
 
 ## HubStudio 批量导出
 
