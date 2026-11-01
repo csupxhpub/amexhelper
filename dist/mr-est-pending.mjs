@@ -202,3 +202,29 @@ export function sumEstimates(rows) {
   if (rows.some(r => r['est pending'] === '' || r['est pending'] == null || !Number.isFinite(Number(r['est pending'])))) return '';
   return rows.reduce((sum,r)=>sum+Number(r['est pending']),0);
 }
+
+export function pendingBreakdown(response) {
+  if (response?.status?.code !== '0000') throw Error('PENDING_BREAKDOWN_UNAVAILABLE');
+  let billed = 0, unbilled = 0;
+  const seen = new Set();
+  for (const row of response.summary || []) {
+    if (row.summariesBy?.transactionCategory !== 'REWARD') continue;
+    const status = row.summariesBy.transactionStatus;
+    if (!['PENDING','QUALIFIED'].includes(status)) throw Error('UNKNOWN_PENDING_STATUS');
+    if (seen.has(status)) throw Error('DUPLICATE_PENDING_STATUS');
+    seen.add(status);
+    const value = row.totalAmount?.amount?.value;
+    if (value === '' || value == null || !Number.isFinite(Number(value))) throw Error('PENDING_BREAKDOWN_AMOUNT_UNAVAILABLE');
+    if (status === 'PENDING') billed = Number(value);
+    else unbilled = Number(value);
+  }
+  if (seen.size !== 2) throw Error('PENDING_BREAKDOWN_INCOMPLETE');
+  return { billed, unbilled };
+}
+
+export function combinePendingEstimate(originalPending, billedPending, originalUnbilled, recalculatedUnbilled) {
+  if ([originalPending,billedPending,originalUnbilled,recalculatedUnbilled].some(v => v === '' || v == null || !Number.isFinite(Number(v)))) return '';
+  const [original,billed,unbilled,recalculated] = [originalPending,billedPending,originalUnbilled,recalculatedUnbilled].map(Number);
+  if (Math.abs(billed + unbilled - original) > 0.000001) return '';
+  return Math.max(original, billed + recalculated);
+}

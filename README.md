@@ -167,7 +167,7 @@ acc no,cards,mr account,earned,all redeemed,airlines redeemed,35% redeem left,pe
 | `mr account` | MR 账号。 |
 | `earned` | 已获得积分。 |
 | `all redeemed` | Dashboard 的 `loyaltyBalances.used`。 |
-| `est pending` | CLI 重算 BG、BP 当前已入账未出账单消费的常规积分：BG 前两类按年度 $150,000 上限 4x／1x；BP 合资格类别或单笔 $5,000 以上按年度 $2,000,000 上限 2x／1x。不与原始 pending 相加；分类、退款分配或账期资料不足时留空，合计同步保留未知。 |
+| `est pending` | 已出账单待到账积分 + BG、BP 未出账单重算积分；从原 pending 中替换已包含的 QUALIFIED 部分，避免重复累计，并以原 pending 为下限。BG 年度 $150,000 上限按 4x／1x，BP 年度 $2,000,000 上限按 2x／1x。拆分、分类或退款证据不足时留空。 |
 | `airlines redeemed` | `all redeemed - 当年已入账航司转点净额`；名称保留当前 CSV 接口，差额不是精确的合资格机票兑换额。 |
 | `35% redeem left` | `max(0, round(1000000 / 0.35 - airlines redeemed))` 的估计值；转点明细或 token 不可用、分类未知或总额不一致时留空。 |
 | `pending` | Pending 积分。 |
