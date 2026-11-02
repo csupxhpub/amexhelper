@@ -30,8 +30,7 @@ Amex Helper 用于导出 American Express 卡片余额、Membership Rewards 积�
 - `{index}_balance_{yyyymmdd}.csv`
 - `{index}_mr_{yyyymmdd}.csv`
 - `{index}_benefits_{yyyymmdd}.csv`
-- `transactions/{year}/{index}_transactions_{year}.csv`：显式选择交易模式后默认导出当年全量，也可用 `--year` 指定历史年份；验证完成后替换固定年度文件供复用。
-- `transactions/ranges/{index}_transactions_{from}_{to}.csv`：用成对的 `--from`、`--to` 导出特定日期区间，不覆盖年度文件。
+- `{index}_transactions_{YYYYMMDD}_{YYYYMMDD}.csv`：在面板选择 From / To 后单独导出；有请求失败警告时文件名增加 `_partial`，不得当作完整年度证据。下载位置由浏览器设置决定，不使用 CLI 的目录布局或参数。
 
 ## HubStudio 批量导出
 
@@ -79,7 +78,8 @@ node dist/amex-data-fetcher.mjs \
 | `--config <file>` | 无 | 从共享 INI 或原有 JSON 配置读取 Profile 列表；可替代 `--profile`。 |
 | `--out <dir>` | `./amex_export_{yyyymmdd}` | CSV 输出目录。 |
 | `--mode <mode>` | `all` | 可选 `all`、`balance`、`mr`、`benefits`、`transactions`；`all` 不含交易明细。 |
-| `--from` / `--to` | 无 | 交易模式必填，`YYYY-MM-DD` 闭区间。 |
+| `--year YYYY` | 当前自然年 | 交易模式默认年度全量；与显式日期区间互斥。 |
+| `--from` / `--to` | 无 | 可选的 `YYYY-MM-DD` 闭区间，必须成对提供，不能与 `--year` 混用。 |
 | `--merchant <name>` | 无 | 可重复的虚拟卡对账提示，不过滤交易明细。 |
 | `--login-timeout-ms <ms>` | `600000` | 等待手工登录或验证的最长时间。 |
 | `--keep-open` | 关闭 | 导出完成后保留 HubStudio 浏览器窗口。 |
@@ -87,6 +87,8 @@ node dist/amex-data-fetcher.mjs \
 | `--help` / `-h` | 无 | 显示帮助。 |
 
 推荐直接复用 `amex-login.local.ini`。脚本会读取 `[general]` 中的 `base_url`、`login_timeout_ms`、`keep_open`，并处理所有已启用的 `[profile.xx]`。其中的账号密码不会被读取用于数据导出。
+
+CLI 交易模式默认把年度明细写入 `<out>/transactions/{year}/{index}_transactions_{year}.csv`；显式区间写入 `<out>/transactions/ranges/{index}_transactions_{from}_{to}.csv`。这与上文油猴脚本的浏览器下载文件不同，具体汇总及覆盖规则见 [Data Fetcher Skill](skills/amex-data-fetcher/SKILL.md)。
 
 原有 JSON `--config` 仍然兼容，例如：
 
@@ -173,7 +175,7 @@ acc no,cards,mr account,earned,all redeemed,airlines redeemed,35% redeem left,pe
 | `pending` | Pending 积分。 |
 | `balance` | 当前可用积分。 |
 
-MR CSV 最后一行为 `total`，汇总 `earned`、`pending` 和 `balance`。没有 Business Platinum 卡时，`cards` 显示 `NA`；Business Platinum 未登记航司时，`airline code` 显示 `NULL`。航司转点从 `ReadLoyaltyTransactions.v3` 分页读取，只累计当年已入账且属于已知航司的净转点，去重并抵减冲回；详细口径见 [Data Fetcher](skills/amex-data-fetcher/README.md)。
+MR CSV 最后一行为 `total`，汇总 `earned`、`pending`、`est pending` 和 `balance`；任一组成行的 `est pending` 不可用时，其估值合计留空，不把未知当作 0。没有 Business Platinum 卡时，`cards` 显示 `NA`；Business Platinum 未登记航司时，`airline code` 显示 `NULL`。航司转点从 `ReadLoyaltyTransactions.v3` 分页读取，只累计当年已入账且属于已知航司的净转点，去重并抵减冲回；详细口径见 [Data Fetcher](skills/amex-data-fetcher/README.md)。
 
 Benefits CSV：
 
