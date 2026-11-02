@@ -12,7 +12,8 @@ export function rewardCategory(transaction) {
   const category = `${detail?.categoryName || ''} ${detail?.subcategoryName || ''}`.trim();
   const description = String(transaction.displayDescription || transaction.description || '');
   if (String(transaction.subType).toLowerCase() === 'payment' || /\b(?:(?:ONLINE|MOBILE|AUTOPAY) PAYMENT|THANK YOU FOR YOUR PAYMENT|PAYMENT RECEIVED)\b/i.test(description)) return 'excluded';
-  if (/\b(?:statement credit|wireless credit|airline fee reimbursement|hotel credit|pay with points|purchase with MR points|points for amex trvl|ADJ REDIST|ADJ FOR BALANCE)\b/i.test(description)) return 'excluded';
+  if (/\b(?:statement credit|wireless credit|airline fee reimbursement|hotel credit|purchase with MR points|points for amex trvl|ADJ REDIST|ADJ FOR BALANCE)\b/i.test(description)) return 'excluded';
+  if (String(transaction.type).toUpperCase() === 'CREDIT' && /\bpay with points\b/i.test(description)) return 'excluded';
   if (/\b(?:annual fee|membership fee|late fee|interest charge|cash advance)\b/i.test(description)) return 'excluded';
   if (String(transaction.type).toUpperCase()==='CREDIT' && /\b(?:FLEXIBLE BUSINESS CREDIT|WALMART PLUS MONTHLY)\b/i.test(description)) return 'excluded';
   // Membership subscriptions / office-supply stores are outside both bonus
@@ -41,48 +42,25 @@ function cents(value) {
   return Math.round(Number(text) * 100);
 }
 
-// MR-funded Travel bookings can carry a matching debit/credit bookkeeping
-// pair. Remove only evidenced, posted pairs; ordinary travel refunds and
-// unmatched/partial credits still require their original reward allocation.
-export function withoutMrTravelPairs(transactions) {
-  const normalize = t => String(t.displayDescription || t.description || '').toUpperCase().replace(/[^A-Z0-9]+/g, ' ').trim();
-  const travel = s => /\bAMEX\s*(?:TRAVEL|TRVL|FINE HOT)|AMEXTRAVEL/.test(s);
-  const points = s => /\b(?:PWP|PAY WITH POINTS|PURCHASE WITH MR POINTS|POINTS FOR AMEX TRVL)\b/.test(s);
-  const date = t => String(t.postDate || t.displayDate || t.chargeDate || '').slice(0, 10);
-  const valid = t => String(t.status).toUpperCase() === 'POSTED' && t.identifier && /^\d{4}-\d{2}-\d{2}$/.test(date(t));
-  const unique = [...new Map(transactions.filter(valid).map(t => [t.identifier, t])).values()];
-  const removed = new Set();
-  for (const credit of unique) {
-    if (String(credit.type).toUpperCase() !== 'CREDIT' || removed.has(credit.identifier)) continue;
-    const description = normalize(credit);
-    if (!travel(description) || !points(description)) continue;
-    const candidates = unique.filter(debit => {
-      if (String(debit.type).toUpperCase() !== 'DEBIT' || removed.has(debit.identifier)) return false;
-      const debitDescription = normalize(debit);
-      if (!travel(debitDescription) || (/\bPWP\b/.test(description) && debitDescription !== description)) return false;
-      if (credit.transactionAmount?.currency !== 'USD' || debit.transactionAmount?.currency !== 'USD') return false;
-      const days = (Date.parse(date(credit)) - Date.parse(date(debit))) / 86400000;
-      try { return days >= 0 && days <= 31 && Math.abs(cents(credit.transactionAmount.amount)) > 0 && Math.abs(cents(credit.transactionAmount.amount)) === Math.abs(cents(debit.transactionAmount.amount)); } catch { return false; }
-    });
-    // Multiple identical candidate purchases cannot be allocated reliably.
-    if (candidates.length !== 1) continue;
-    removed.add(credit.identifier); removed.add(candidates[0].identifier);
-  }
-  return transactions.filter(t => !removed.has(t.identifier));
-}
-
 export function mergeTransactionEvidence(transactions, reread) {
-  const byId = new Map(reread.map(t => [t.identifier, t]));
+  const byId = new Map(), duplicates = new Set();
+  for (const t of reread) {
+    if (byId.has(t.identifier) || duplicates.has(t.identifier)) { byId.delete(t.identifier); duplicates.add(t.identifier); }
+    else byId.set(t.identifier, t);
+  }
   return transactions.map(t => {
     const other = byId.get(t.identifier);
     if (!t.identifier || !other || t.type !== other.type || t.status !== other.status
         || t.postDate !== other.postDate || t.chargeDate !== other.chargeDate
+        || t.displayDate !== other.displayDate || t.statementEndDate !== other.statementEndDate
+        || t.displayDescription !== other.displayDescription || t.description !== other.description
         || t.transactionAmount?.currency !== other.transactionAmount?.currency
         || String(t.transactionAmount?.amount) !== String(other.transactionAmount?.amount)) return t;
     const result = {...t};
     if (!(t.message?.id === 'points' && t.message.rewardRate) && other.message?.id === 'points' && other.message.rewardRate) result.message = other.message;
     const a=t.extendedDetails||{}, b=other.extendedDetails||{};
-    result.extendedDetails={...a,category:a.category||b.category,merchant:{...a.merchant,address:{...b.merchant?.address,...a.merchant?.address}}};
+    const present = value => Object.fromEntries(Object.entries(value||{}).filter(([,v]) => v !== undefined && v !== null && v !== ''));
+    result.extendedDetails={...a,category:{...present(b.category),...present(a.category)},merchant:{...a.merchant,address:{...present(b.merchant?.address),...present(a.merchant?.address)}}};
     return result;
   });
 }
@@ -91,13 +69,14 @@ export function mergeTransactionEvidence(transactions, reread) {
 // if even this maximum cannot exceed QUALIFIED, the final total is proven to
 // equal original pending. It does not assert an unknown purchase's exact rate.
 export function unbilledPointsUpperBound({product,transactions,statementStart,statementEnd,now}) {
-  if (!['bg','bp'].includes(product) || !statementStart || !statementEnd || statementStart>now || statementEnd<now) return null;
+  if (!['bg','bp'].includes(product) || !/^\d{4}-\d{2}-\d{2}$/.test(statementStart||'') || !/^\d{4}-\d{2}-\d{2}$/.test(statementEnd||'') || statementStart>statementEnd || statementStart>now || statementEnd<now) return null;
   const seen=new Set();let upper=0;
-  try {for(const t of withoutMrTravelPairs(transactions)) {
+  try {for(const t of transactions) {
     if(String(t.status).toUpperCase()!=='POSTED')continue;
     const date=String(t.postDate||t.displayDate||t.chargeDate||'').slice(0,10);
     if(!t.identifier||!/^\d{4}-\d{2}-\d{2}$/.test(date))return null;
     if(date<statementStart||date>statementEnd||date>now||seen.has(t.identifier))continue;
+    if(t.statementEndDate&&String(t.statementEndDate).slice(0,10)!==statementEnd)return null;
     seen.add(t.identifier);
     if(rewardCategory(t)==='excluded')continue;
     if(t.transactionAmount?.currency!=='USD')return null;
@@ -105,8 +84,10 @@ export function unbilledPointsUpperBound({product,transactions,statementStart,st
     if(type==='CREDIT')continue; // ignoring deductions can only increase the bound
     const amount=Math.abs(cents(t.transactionAmount.amount));
     const explicit=t.message?.id==='points'?Number(String(t.message.rewardRate||'').replace(/X$/i,'')):0;
-    const wireless=product==='bp'&&amount<500000&&/\bTELLO\b/i.test(t.displayDescription||t.description||'');
-    const maximum=Math.max(Number.isFinite(explicit)?explicit:0,wireless?1:product==='bg'?4:2);
+    // Missing BP metadata could conceal 5X travel. A merchant-name guess
+    // cannot establish a smaller upper bound. Explicit rates can exceed 5X.
+    const known=Number.isFinite(explicit)&&explicit>=1;
+    const maximum=known?Math.max(explicit,product==='bg'?4:2):product==='bg'?4:5;
     upper+=Math.round(amount/100)*maximum;
   }}catch{return null;}
   return upper;
@@ -116,7 +97,6 @@ export function estimateUnbilledPoints({ product, transactions, statementStart, 
   if (!['bg', 'bp'].includes(product)) return { points: null, reason: 'UNSUPPORTED_PRODUCT' };
   if (!/^\d{4}-\d{2}-\d{2}$/.test(statementStart || '') || !/^\d{4}-\d{2}-\d{2}$/.test(statementEnd || '')
       || statementStart > now || statementEnd < now || statementStart > statementEnd) return { points: null, reason: 'CURRENT_STATEMENT_UNAVAILABLE' };
-  transactions = withoutMrTravelPairs(transactions);
   if (transactions.some(t => t.message?.id === 'points' && t.message.rewardRate)) {
     return estimateFromRewardRates({product,transactions,statementStart,statementEnd,year,openedDate,now});
   }
@@ -185,7 +165,6 @@ export function estimateUnbilledPoints({ product, transactions, statementStart, 
 // Bound unknown historical categories and refunds instead of treating them as
 // proven qualifying spend. Publish only when both bounds round identically.
 export function estimateFromRewardRates({product,transactions,statementStart,statementEnd,year,openedDate,now}) {
-  transactions = withoutMrTravelPairs(transactions);
   const unavailable=reason=>({points:null,reason});
   const normalized=s=>String(s||'').toUpperCase().replace(/[^A-Z0-9]+/g,' ').trim();
   const merchant=t=>normalized(t.displayDescription||t.description);
