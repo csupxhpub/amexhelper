@@ -93,10 +93,38 @@ export function unbilledPointsUpperBound({product,transactions,statementStart,st
   return upper;
 }
 
+function excludeConfirmedTravelRedemptions(transactions, now) {
+  const pairs = new Map();
+  for (const transaction of transactions) {
+    const description = String(transaction.displayDescription || transaction.description || '').trim().toUpperCase();
+    const type = String(transaction.type).toUpperCase();
+    const debit = type === 'DEBIT' && description === 'PWP AMERICAN EXPRPHOENIX AZ';
+    const credit = type === 'CREDIT' && description === 'AMEX TRAVEL PAY WITH POINTS CREDIT';
+    if ((!debit && !credit) || String(transaction.status).toUpperCase() !== 'POSTED'
+        || !transaction.identifier || !transaction.chargeDate || !transaction.statementEndDate
+        || !transaction.postDate || transaction.postDate.slice(0, 10) > now
+        || transaction.transactionAmount?.currency !== 'USD') continue;
+    let amount;
+    try { amount = Math.abs(cents(transaction.transactionAmount.amount)); } catch { continue; }
+    if (!amount) continue;
+    const key = JSON.stringify([transaction.chargeDate, transaction.statementEndDate, amount]);
+    const pair = pairs.get(key) || {debits: [], credits: []};
+    (debit ? pair.debits : pair.credits).push(transaction);
+    pairs.set(key, pair);
+  }
+  const excluded = new Set();
+  for (const {debits, credits} of pairs.values()) {
+    if (debits.length === 1 && credits.length === 1 && debits[0].message?.id !== 'points'
+        && debits[0].identifier !== credits[0].identifier) excluded.add(debits[0]);
+  }
+  return transactions.filter(transaction => !excluded.has(transaction));
+}
+
 export function estimateUnbilledPoints({ product, transactions, statementStart, statementEnd, year, openedDate, now = new Date().toISOString().slice(0, 10) }) {
   if (!['bg', 'bp'].includes(product)) return { points: null, reason: 'UNSUPPORTED_PRODUCT' };
   if (!/^\d{4}-\d{2}-\d{2}$/.test(statementStart || '') || !/^\d{4}-\d{2}-\d{2}$/.test(statementEnd || '')
       || statementStart > now || statementEnd < now || statementStart > statementEnd) return { points: null, reason: 'CURRENT_STATEMENT_UNAVAILABLE' };
+  transactions = excludeConfirmedTravelRedemptions(transactions, now);
   if (transactions.some(t => t.message?.id === 'points' && t.message.rewardRate)) {
     return estimateFromRewardRates({product,transactions,statementStart,statementEnd,year,openedDate,now});
   }
