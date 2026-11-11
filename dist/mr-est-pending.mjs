@@ -5,6 +5,14 @@ const BG = new Set(['electronics', 'advertising', 'gas', 'restaurant', 'wireless
 const BP = new Set(['electronics', 'construction', 'shipping']);
 const US = /^(?:US|USA|UNITED STATES|UNITED STATES OF AMERICA)$/i;
 
+export function mrAccountDate(now = new Date()) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).formatToParts(now);
+  const values = Object.fromEntries(parts.map(part => [part.type, part.value]));
+  return `${values.year}-${values.month}-${values.day}`;
+}
+
 export function rewardCategory(transaction) {
   const merchant = transaction.extendedDetails?.merchant;
   const country = merchant?.address?.countryName || merchant?.address?.countryCode || '';
@@ -120,7 +128,7 @@ function excludeConfirmedTravelRedemptions(transactions, now) {
   return transactions.filter(transaction => !excluded.has(transaction));
 }
 
-export function estimateUnbilledPoints({ product, transactions, statementStart, statementEnd, year, openedDate, now = new Date().toISOString().slice(0, 10) }) {
+export function estimateUnbilledPoints({ product, transactions, statementStart, statementEnd, year, openedDate, now = mrAccountDate() }) {
   if (!['bg', 'bp'].includes(product)) return { points: null, reason: 'UNSUPPORTED_PRODUCT' };
   if (!/^\d{4}-\d{2}-\d{2}$/.test(statementStart || '') || !/^\d{4}-\d{2}-\d{2}$/.test(statementEnd || '')
       || statementStart > now || statementEnd < now || statementStart > statementEnd) return { points: null, reason: 'CURRENT_STATEMENT_UNAVAILABLE' };
