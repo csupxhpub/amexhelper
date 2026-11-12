@@ -1,3 +1,18 @@
+const MERCHANT_DESCRIPTORS = new Map([
+  ["newegg com", "newegg"],
+  ["pxy neweggg diamond bar ca", "newegg"],
+  ["pxy newegg inc diamond bar ca", "newegg"],
+  ["msi computer corp us store", "msi"],
+  ["pxy bt msi computcity of industry ca", "msi"],
+  ["www bestbuy com 888", "bestbuy"],
+  ["pxy bestbuycom807richfield mn", "bestbuy"],
+  ["tello com", "tello"],
+  ["pxy tello us tellatlanta ga", "tello"],
+  ["united airlines", "united airlines"],
+  ["pxy united airlinhouston tx", "united airlines"],
+  ["pxy hilton grand las vegas nv", "hilton grand vacations"],
+]);
+
 export function parseVirtualAliasEvidence(text) {
   const entries = JSON.parse(text.replace(/^\uFEFF/, ""));
   if (!Array.isArray(entries)) throw new Error("Verified alias evidence must be a JSON array");
@@ -36,7 +51,13 @@ export function reconcileVirtualCardHistory(rows, virtualTransactions, aliasEvid
     const historyType = String(transaction.transactionChargeType || "").toUpperCase();
     const historyMerchant = normalizeVirtualSettlementMerchant(transaction.merchantName);
     const base = rows.flatMap((row, index) => {
-      if (!Number.isFinite(historyAmount) || row.amount === "" || Number(row.amount) !== historyAmount || row.type !== historyType) return [];
+      if (!Number.isFinite(historyAmount) || row.amount === "" || row.type !== historyType) return [];
+      const rowAmount = Number(row.amount);
+      // Virtual settlement credits can report a positive magnitude; ordinary activity reports the signed credit.
+      const amountMatches = historyType === "CREDIT"
+        ? Math.abs(rowAmount) === Math.abs(historyAmount)
+        : rowAmount === historyAmount;
+      if (!amountMatches || (money?.currency && row.currency && money.currency !== row.currency)) return [];
       if (row["virtual card"] && row["virtual card"] !== transaction.virtualCard) return [];
       const sameDates = (!chargeDate || (row["charge date"] || row.date) === chargeDate)
         && (!postDate || (row["post date"] || row.date) === postDate);
@@ -62,18 +83,19 @@ export function reconcileVirtualCardHistory(rows, virtualTransactions, aliasEvid
   }
 
   for (const { candidates, aliases } of groups.values()) {
-    if (candidates.length !== aliases.length || candidates.some(index => rowGroups.get(index) !== 1)) {
+    if (candidates.some(index => rowGroups.get(index) !== 1)) {
       ambiguous += aliases.length;
       continue;
     }
     const assignments = matchVirtualAliasEvidence(rows, candidates, aliases, aliasEvidence);
+    const balanced = candidates.length === aliases.length;
     for (const index of candidates) {
       const row = rows[index];
-      row["card type"] = "virtual";
       const alias = assignments.get(index);
+      if (balanced || alias) row["card type"] = "virtual";
       if (alias) row["virtual card"] = alias;
-      else ambiguous += 1;
     }
+    ambiguous += aliases.length - assignments.size;
   }
   return { unmatched, ambiguous };
 }
@@ -82,7 +104,8 @@ function matchVirtualAliasEvidence(rows, candidates, aliases, evidence) {
   const remaining = new Map();
   for (const alias of aliases) remaining.set(alias, (remaining.get(alias) || 0) + 1);
   const assignments = new Map();
-  if (remaining.size > 1) {
+  const balanced = candidates.length === aliases.length;
+  if (remaining.size > 1 || !balanced) {
     const usedKeys = new Set();
     for (const index of candidates) {
       const row = rows[index];
@@ -96,7 +119,7 @@ function matchVirtualAliasEvidence(rows, candidates, aliases, evidence) {
     }
   }
   const leftover = [...remaining].filter(([, count]) => count > 0);
-  if (leftover.length === 1) {
+  if (balanced && leftover.length === 1) {
     for (const index of candidates) {
       if (!assignments.has(index)) assignments.set(index, leftover[0][0]);
     }
@@ -106,9 +129,7 @@ function matchVirtualAliasEvidence(rows, candidates, aliases, evidence) {
 
 function normalizeVirtualSettlementMerchant(value) {
   const normalized = normalizeMerchantText(value);
-  // Amex uses different descriptors for the same merchant on the two feeds.
-  if (normalized === "pxy neweggg diamond bar ca" || normalized === "newegg com") return "newegg";
-  return normalized;
+  return MERCHANT_DESCRIPTORS.get(normalized) ?? normalized;
 }
 
 function normalizeMerchantText(value) {

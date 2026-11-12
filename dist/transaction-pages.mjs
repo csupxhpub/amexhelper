@@ -58,12 +58,39 @@ export function virtualCardHistoryPage(response) {
 export function virtualCardHistoryIdentity(card, record) {
   const token = String(record?.encrypted_virtual_card_number || "");
   const alias = String(record?.accounting_fields?.accounting_field_7 || "").normalize("NFKC").trim();
-  const ending = String(record?.virtual_card_last_five || "").trim();
+  const candidate = String(record?.virtual_card_last_five || "").trim();
+  const ending = /^\d{5}$/.test(candidate) ? candidate : "";
   if (!token) return { error: "missing virtual card token" };
-  if (!alias && !/^\d{5}$/.test(ending)) return { error: "missing virtual card alias and usable ending" };
   return {
     token,
-    label: alias ? `${card}_${alias}` : `${card}_virtual_${ending}`,
-    warning: alias ? "" : "missing virtual card alias; using card ending",
+    ending,
+    label: alias ? `${card}_${alias}` : ending ? `${card}_virtual_${ending}` : "",
+    warning: alias ? "" : ending ? "missing virtual card alias; using card ending" : "missing virtual card alias and usable ending",
   };
+}
+
+export const VIRTUAL_TRANSACTION_HEADERS = [
+  "master card", "virtual card", "virtual card ending", "charge date", "post date",
+  "merchant", "amount", "currency", "type", "settlement type",
+];
+
+export function virtualCardSettlementRows(masterCard, settlements = []) {
+  return settlements.map(settlement => {
+    const money = settlement.transactionAmount;
+    return {
+      "master card": masterCard,
+      "virtual card": settlement.virtualCard ?? "",
+      "virtual card ending": settlement.virtualCardEnding ?? "",
+      "charge date": settlement.transactionDate ?? "",
+      "post date": settlement.transactionPostDate ?? "",
+      merchant: settlement.merchantName ?? "",
+      amount: typeof money === "object" ? money?.amount ?? money?.value ?? "" : money ?? "",
+      currency: money?.currency ?? "",
+      type: settlement.transactionChargeType ?? "",
+      "settlement type": settlement.transactionType ?? "",
+    };
+  }).sort((a, b) => String(a["post date"] || a["charge date"]).localeCompare(String(b["post date"] || b["charge date"]))
+    || a["virtual card"].localeCompare(b["virtual card"])
+    || String(a["charge date"]).localeCompare(String(b["charge date"]))
+    || String(a.merchant).localeCompare(String(b.merchant)));
 }

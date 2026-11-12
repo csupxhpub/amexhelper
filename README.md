@@ -30,7 +30,10 @@ Amex Helper 用于导出 American Express 卡片余额、Membership Rewards 积�
 - `{index}_balance_{yyyymmdd}.csv`
 - `{index}_mr_{yyyymmdd}.csv`
 - `{index}_benefits_{yyyymmdd}.csv`
-- `{index}_transactions_{YYYYMMDD}_{YYYYMMDD}.csv`：在面板选择 From / To 后单独导出；有请求失败警告时文件名增加 `_partial`，不得当作完整年度证据。下载位置由浏览器设置决定，不使用 CLI 的目录布局或参数。
+- `{index}_transactions_{YYYYMMDD}_{YYYYMMDD}.csv` 保存指定区间的普通流水。
+- `{index}_virtual_transactions_{YYYYMMDD}_{YYYYMMDD}.csv` 保存同一区间的虚拟卡结算，含所属主卡、别名和尾号。
+
+在面板选好 From 和 To 后，点击 **Transactions CSV** 旁的 **Export**，浏览器会下载两份文件。读取不完整的文件会加上 `_partial`。Amex 要求二次授权时，导出面板会显示管理页链接、步骤和五分钟倒计时。在已有虚拟卡上点击 **View Card details**，按 Amex 提示完成验证，导出会自动继续。同一批次再次要求验证时会重新计时。
 
 ## HubStudio 批量导出
 
@@ -81,6 +84,7 @@ node dist/amex-data-fetcher.mjs \
 | `--year YYYY` | 当前自然年 | 交易模式默认年度全量；与显式日期区间互斥。 |
 | `--from` / `--to` | 无 | 可选的 `YYYY-MM-DD` 闭区间，必须成对提供，不能与 `--year` 混用。 |
 | `--merchant <name>` | 无 | 可重复的虚拟卡对账提示，不过滤交易明细。 |
+| `--virtual-alias-evidence <file>` | 无 | 可选的本地 JSON，用已核实的别名补充普通流水。 |
 | `--login-timeout-ms <ms>` | `600000` | 等待手工登录或验证的最长时间。 |
 | `--keep-open` | 关闭 | 导出完成后保留 HubStudio 浏览器窗口。 |
 | `--close-on-complete` | 关闭 | 覆盖配置中的 `keep_open = true`，导出后关闭窗口。 |
@@ -88,7 +92,7 @@ node dist/amex-data-fetcher.mjs \
 
 推荐直接复用 `amex-login.local.ini`。脚本会读取 `[general]` 中的 `base_url`、`login_timeout_ms`、`keep_open`，并处理所有已启用的 `[profile.xx]`。其中的账号密码不会被读取用于数据导出。
 
-CLI 交易模式默认把年度明细写入 `<out>/transactions/{year}/{index}_transactions_{year}.csv`；显式区间写入 `<out>/transactions/ranges/{index}_transactions_{from}_{to}.csv`。这与上文油猴脚本的浏览器下载文件不同，具体汇总及覆盖规则见 [Data Fetcher Skill](skills/amex-data-fetcher/SKILL.md)。
+CLI 交易模式把年度普通流水和虚拟卡结算分别写入 `<out>/transactions/{year}/{index}_transactions_{year}.csv` 和 `<out>/transactions/{year}/{index}_virtual_transactions_{year}.csv`。显式日期区间的两份文件写入 `<out>/transactions/ranges/`，文件名包含起止日期。读取不完整的文件会标记 `_partial`，已有完整文件继续保留。
 
 原有 JSON `--config` 仍然兼容，例如：
 
