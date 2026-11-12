@@ -327,7 +327,7 @@ export function combinePendingEstimate(originalPending, billedPending, originalU
 
 const MR_REWARD_RETRY_DELAYS_MS = [2_000, 10_000, 30_000];
 
-class MrRewardEvidenceUnavailable extends Error {}
+class MrPendingFallback extends Error {}
 
 function loyaltyPendingRequest(accountToken) {
   return {accountToken,productType:'AEXP_CARD_ACCOUNT',period:'P6M',transactionStatus:['PENDING','QUALIFIED'],category:['REWARD'],summariesBy:['category','transactionStatus'],periodType:'CALENDAR_PERIOD',summariesFor:'LOYALTY_ACCOUNT'};
@@ -349,7 +349,7 @@ export async function readTotalEstimatedMrPending(cards, originalPending, { read
     if (total === '') throw Error('PENDING_BREAKDOWN_RECONCILIATION_FAILED');
     return total;
   } catch(error) {
-    if (error instanceof MrRewardEvidenceUnavailable) {
+    if (error instanceof MrPendingFallback) {
       onFallback(`MR est pending uses Amex pending for ${error.message}`);
       return originalPending;
     }
@@ -383,8 +383,14 @@ async function readEstimatedMrPending(selected, { readActivity, log, audit }) {
       const vitals = card.mr_vitals;
       const today = mrAccountDate();
       const year = Number(today.slice(0,4));
-      const period = vitals?.statementPeriods?.find(p => String(p.statementStartDate).slice(0,10) <= today && String(p.statementEndDate).slice(0,10) >= today);
-      if (!period || String(period.statementStartDate).slice(0,4) !== String(year)) throw new Error('CURRENT_YEAR_STATEMENT_UNAVAILABLE');
+      const periods = Array.isArray(vitals?.statementPeriods) ? vitals.statementPeriods : [];
+      const period = periods.find(p => {
+        const start = String(p?.statementStartDate ?? '').slice(0, 10);
+        const end = String(p?.statementEndDate ?? '').slice(0, 10);
+        return /^\d{4}-\d{2}-\d{2}$/.test(start) && /^\d{4}-\d{2}-\d{2}$/.test(end) && start <= today && today <= end;
+      });
+      if (!period) throw new MrPendingFallback(`${card.card} CURRENT_STATEMENT_UNAVAILABLE`);
+      if (String(period.statementStartDate).slice(0,4) !== String(year)) throw new Error('CURRENT_YEAR_STATEMENT_UNAVAILABLE');
       const readCardActivity = () => readActivity(card.account_token, year);
       const transactions = await readCardActivity();
       const { input, result, unresolved } = await retryMrRewardEvidence(
@@ -396,11 +402,11 @@ async function readEstimatedMrPending(selected, { readActivity, log, audit }) {
         (attempt, maxAttempts, delay) => log(`retrying missing reward evidence for ${card.card} (${attempt}/${maxAttempts}) in ${delay}ms`),
       );
       await audit?.(card, input, result);
-      if (unresolved) throw new MrRewardEvidenceUnavailable(`${card.card} ${result.reason}`);
+      if (unresolved) throw new MrPendingFallback(`${card.card} ${result.reason}`);
       if (result.points === null) throw new Error(result.reason);
       total += result.points;
     } catch(error) {
-      if (error instanceof MrRewardEvidenceUnavailable) throw error;
+      if (error instanceof MrPendingFallback) throw error;
       log(`est pending unavailable for ${card.card}: ${error.message}`);
       return '';
     }

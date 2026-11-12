@@ -181,7 +181,7 @@ acc no,cards,mr account,earned,all redeemed,airlines redeemed,35% redeem left,pe
 
 MR CSV 最后一行为 `total`，汇总 `earned`、`pending`、`est pending` 和 `balance`；任一组成行的 `est pending` 不可用时，其估值合计留空，不把未知当作 0。没有 Business Platinum 卡时，`cards` 显示 `NA`；Business Platinum 未登记航司时，`airline code` 显示 `NULL`。航司转点从 `ReadLoyaltyTransactions.v3` 分页读取，只累计当年已入账且属于已知航司的净转点，去重并抵减冲回；详细口径见 [Data Fetcher](skills/amex-data-fetcher/README.md)。
 
-命令行和油猴都会重试缺少倍率或奖励资格证据的交易。重试后仍无法确认时，MR CSV 照常导出，受影响 MR 账户的 `est pending` 使用 Amex Dashboard 的 `pending`，并显示回退提示。
+命令行和油猴都会重试缺少倍率或奖励资格证据的交易。重试后仍无法确认，或 Vitals 没有覆盖当前日期的有效账期时，MR CSV 照常导出，受影响 MR 账户的 `est pending` 使用 Amex Dashboard 的 `pending`，并显示回退提示。
 
 Benefits CSV：
 
