@@ -327,20 +327,20 @@ export function combinePendingEstimate(originalPending, billedPending, originalU
 
 const MR_REWARD_RETRY_DELAYS_MS = [2_000, 10_000, 30_000];
 
-export class MrRewardEvidenceUnavailable extends Error {}
+class MrRewardEvidenceUnavailable extends Error {}
 
 function loyaltyPendingRequest(accountToken) {
   return {accountToken,productType:'AEXP_CARD_ACCOUNT',period:'P6M',transactionStatus:['PENDING','QUALIFIED'],category:['REWARD'],summariesBy:['category','transactionStatus'],periodType:'CALENDAR_PERIOD',summariesFor:'LOYALTY_ACCOUNT'};
 }
 
-export async function readTotalEstimatedMrPending(cards, originalPending, { readActivity, readBreakdown, log, audit }) {
+export async function readTotalEstimatedMrPending(cards, originalPending, { readActivity, readBreakdown, log, audit, onFallback = log }) {
   const basic = [...new Map(cards.filter(c => !c.relationship || c.relationship === 'BASIC').map(c => [c.account_token,c])).values()];
   const supported = basic.filter(c => /_(?:bg|bp)_/.test(c.card));
   if (!Number.isFinite(originalPending)) return '';
   if (!supported.length) return originalPending;
-  const recalculated = await readEstimatedMrPending(supported, { readActivity, log, audit });
-  if (recalculated === '') return '';
   try {
+    const recalculated = await readEstimatedMrPending(supported, { readActivity, log, audit });
+    if (recalculated === '') return '';
     const accountToken = basic[0]?.account_token;
     if (!accountToken) throw Error('PENDING_BREAKDOWN_TOKEN_UNAVAILABLE');
     const {billed,unbilled} = pendingBreakdown(await readBreakdown(loyaltyPendingRequest(accountToken)));
@@ -349,6 +349,10 @@ export async function readTotalEstimatedMrPending(cards, originalPending, { read
     if (total === '') throw Error('PENDING_BREAKDOWN_RECONCILIATION_FAILED');
     return total;
   } catch(error) {
+    if (error instanceof MrRewardEvidenceUnavailable) {
+      onFallback(`MR est pending uses Amex pending for ${error.message}`);
+      return originalPending;
+    }
     log(`est pending total unavailable: ${error.message}`);
     return '';
   }
