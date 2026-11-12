@@ -324,3 +324,82 @@ export function combinePendingEstimate(originalPending, billedPending, originalU
   if (Math.abs(billed + unbilled - original) > 0.000001) return '';
   return Math.max(original, billed + recalculated);
 }
+
+const MR_REWARD_RETRY_DELAYS_MS = [2_000, 10_000, 30_000];
+
+export class MrRewardEvidenceUnavailable extends Error {}
+
+function loyaltyPendingRequest(accountToken) {
+  return {accountToken,productType:'AEXP_CARD_ACCOUNT',period:'P6M',transactionStatus:['PENDING','QUALIFIED'],category:['REWARD'],summariesBy:['category','transactionStatus'],periodType:'CALENDAR_PERIOD',summariesFor:'LOYALTY_ACCOUNT'};
+}
+
+export async function readTotalEstimatedMrPending(cards, originalPending, { readActivity, readBreakdown, log, audit }) {
+  const basic = [...new Map(cards.filter(c => !c.relationship || c.relationship === 'BASIC').map(c => [c.account_token,c])).values()];
+  const supported = basic.filter(c => /_(?:bg|bp)_/.test(c.card));
+  if (!Number.isFinite(originalPending)) return '';
+  if (!supported.length) return originalPending;
+  const recalculated = await readEstimatedMrPending(supported, { readActivity, log, audit });
+  if (recalculated === '') return '';
+  try {
+    const accountToken = basic[0]?.account_token;
+    if (!accountToken) throw Error('PENDING_BREAKDOWN_TOKEN_UNAVAILABLE');
+    const {billed,unbilled} = pendingBreakdown(await readBreakdown(loyaltyPendingRequest(accountToken)));
+    if (basic.length !== supported.length && unbilled !== 0) throw Error('MIXED_CARD_UNBILLED_BREAKDOWN_REQUIRED');
+    const total = combinePendingEstimate(originalPending,billed,unbilled,recalculated);
+    if (total === '') throw Error('PENDING_BREAKDOWN_RECONCILIATION_FAILED');
+    return total;
+  } catch(error) {
+    log(`est pending total unavailable: ${error.message}`);
+    return '';
+  }
+}
+
+export async function retryMrRewardEvidence(input, reread, onRetry, wait = delay => new Promise(resolve => setTimeout(resolve, delay))) {
+  let result = estimateUnbilledPoints(input);
+  if (!["CURRENT_BONUS_ELIGIBILITY_UNRESOLVED", "BONUS_ELIGIBILITY_UNRESOLVED"].includes(result.reason)) {
+    return { input, result, unresolved: false };
+  }
+
+  for (const [index, delay] of MR_REWARD_RETRY_DELAYS_MS.entries()) {
+    onRetry(index + 1, MR_REWARD_RETRY_DELAYS_MS.length, delay);
+    await wait(delay);
+    const transactions = await reread();
+    if (transactions === null) continue;
+    input = { ...input, transactions: mergeTransactionEvidence(input.transactions, transactions) };
+    result = estimateUnbilledPoints(input);
+    if (result.points !== null) return { input, result, unresolved: false };
+  }
+  return { input, result, unresolved: true };
+}
+
+async function readEstimatedMrPending(selected, { readActivity, log, audit }) {
+  let total = 0;
+  for (const card of selected) {
+    try {
+      const vitals = card.mr_vitals;
+      const today = mrAccountDate();
+      const year = Number(today.slice(0,4));
+      const period = vitals?.statementPeriods?.find(p => String(p.statementStartDate).slice(0,10) <= today && String(p.statementEndDate).slice(0,10) >= today);
+      if (!period || String(period.statementStartDate).slice(0,4) !== String(year)) throw new Error('CURRENT_YEAR_STATEMENT_UNAVAILABLE');
+      const readCardActivity = () => readActivity(card.account_token, year);
+      const transactions = await readCardActivity();
+      const { input, result, unresolved } = await retryMrRewardEvidence(
+        { product: card.card.split('_')[1], transactions, statementStart: period.statementStartDate.slice(0,10), statementEnd: period.statementEndDate.slice(0,10), year, openedDate:card.open_date, now: today },
+        () => readCardActivity().catch(() => {
+          log(`could not reread reward evidence for ${card.card}`);
+          return null;
+        }),
+        (attempt, maxAttempts, delay) => log(`retrying missing reward evidence for ${card.card} (${attempt}/${maxAttempts}) in ${delay}ms`),
+      );
+      await audit?.(card, input, result);
+      if (unresolved) throw new MrRewardEvidenceUnavailable(`${card.card} ${result.reason}`);
+      if (result.points === null) throw new Error(result.reason);
+      total += result.points;
+    } catch(error) {
+      if (error instanceof MrRewardEvidenceUnavailable) throw error;
+      log(`est pending unavailable for ${card.card}: ${error.message}`);
+      return '';
+    }
+  }
+  return total;
+}
