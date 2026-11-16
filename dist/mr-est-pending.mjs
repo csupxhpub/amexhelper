@@ -26,7 +26,7 @@ export function rewardCategory(transaction) {
   if (String(transaction.type).toUpperCase()==='CREDIT' && /\b(?:FLEXIBLE BUSINESS CREDIT|WALMART PLUS MONTHLY)\b/i.test(description)) return 'excluded';
   // Membership subscriptions / office-supply stores are outside both bonus
   // category lists; a BP single purchase >=$5k is still handled separately.
-  if (/\b(?:AMAZON PRIME|WALMART\+? MEMB|WMT PLUS|STAPLES(?:\.COM)?)\b/i.test(description)) return 'other';
+  if (/\b(?:AMAZON PRIME|WALMART\+? MEMB(?:\d{10})?|WMT PLUS|STAPLES(?:\.COM)?)\b/i.test(description)) return 'other';
   if (!country) return null;
   const transit = /\b(?:transit|parking|taxicab|taxi|rideshar|tolls?|bus|subway|train|ferr)\b/i.test(category);
   if (!US.test(country)) return transit ? 'transit' : 'other';
@@ -50,6 +50,14 @@ function cents(value) {
   return Math.round(Number(text) * 100);
 }
 
+function activityRewardRate(transaction) {
+  if (transaction.message?.id !== 'points') return null;
+  const label = String(transaction.message.rewardRate ?? '').trim();
+  if (!/^\d+(?:\.\d+)?X?$/i.test(label)) return null;
+  const rate = Number(label.replace(/X$/i, ''));
+  return Number.isFinite(rate) && rate >= 1 ? rate : null;
+}
+
 export function mergeTransactionEvidence(transactions, reread) {
   const byId = new Map(), duplicates = new Set();
   for (const t of reread) {
@@ -65,7 +73,7 @@ export function mergeTransactionEvidence(transactions, reread) {
         || t.transactionAmount?.currency !== other.transactionAmount?.currency
         || String(t.transactionAmount?.amount) !== String(other.transactionAmount?.amount)) return t;
     const result = {...t};
-    if (!(t.message?.id === 'points' && t.message.rewardRate) && other.message?.id === 'points' && other.message.rewardRate) result.message = other.message;
+    if (activityRewardRate(t) === null && activityRewardRate(other) !== null) result.message = other.message;
     const a=t.extendedDetails||{}, b=other.extendedDetails||{};
     const present = value => Object.fromEntries(Object.entries(value||{}).filter(([,v]) => v !== undefined && v !== null && v !== ''));
     result.extendedDetails={...a,category:{...present(b.category),...present(a.category)},merchant:{...a.merchant,address:{...present(b.merchant?.address),...present(a.merchant?.address)}}};
@@ -91,7 +99,7 @@ export function unbilledPointsUpperBound({product,transactions,statementStart,st
     const type=String(t.type).toUpperCase();if(!['DEBIT','CREDIT'].includes(type))return null;
     if(type==='CREDIT')continue; // ignoring deductions can only increase the bound
     const amount=Math.abs(cents(t.transactionAmount.amount));
-    const explicit=t.message?.id==='points'?Number(String(t.message.rewardRate||'').replace(/X$/i,'')):0;
+    const explicit=activityRewardRate(t);
     // Missing BP metadata could conceal 5X travel. A merchant-name guess
     // cannot establish a smaller upper bound. Explicit rates can exceed 5X.
     const known=Number.isFinite(explicit)&&explicit>=1;
@@ -128,13 +136,13 @@ function excludeConfirmedTravelRedemptions(transactions, now) {
   return transactions.filter(transaction => !excluded.has(transaction));
 }
 
-export function estimateUnbilledPoints({ product, transactions, statementStart, statementEnd, year, openedDate, now = mrAccountDate() }) {
+export function estimateUnbilledPoints({ product, transactions, statementStart, statementEnd, year, openedDate, now = mrAccountDate(), transactionPoints }) {
   if (!['bg', 'bp'].includes(product)) return { points: null, reason: 'UNSUPPORTED_PRODUCT' };
   if (!/^\d{4}-\d{2}-\d{2}$/.test(statementStart || '') || !/^\d{4}-\d{2}-\d{2}$/.test(statementEnd || '')
       || statementStart > now || statementEnd < now || statementStart > statementEnd) return { points: null, reason: 'CURRENT_STATEMENT_UNAVAILABLE' };
   transactions = excludeConfirmedTravelRedemptions(transactions, now);
-  if (transactions.some(t => t.message?.id === 'points' && t.message.rewardRate)) {
-    return estimateFromRewardRates({product,transactions,statementStart,statementEnd,year,openedDate,now});
+  if (transactionPoints?.size || transactions.some(t => activityRewardRate(t) !== null)) {
+    return estimateFromRewardRates({product,transactions,statementStart,statementEnd,year,openedDate,now,transactionPoints});
   }
   const seen = new Set(), entries = [];
   try {
@@ -200,11 +208,10 @@ export function estimateUnbilledPoints({ product, transactions, statementStart, 
 // It can still show 4X beyond the annual limit, so always apply the limit.
 // Bound unknown historical categories and refunds instead of treating them as
 // proven qualifying spend. Publish only when both bounds round identically.
-export function estimateFromRewardRates({product,transactions,statementStart,statementEnd,year,openedDate,now}) {
+export function estimateFromRewardRates({product,transactions,statementStart,statementEnd,year,openedDate,now,transactionPoints}) {
   const unavailable=reason=>({points:null,reason});
   const normalized=s=>String(s||'').toUpperCase().replace(/[^A-Z0-9]+/g,' ').trim();
   const merchant=t=>normalized(t.displayDescription||t.description);
-  const rate=t=>t.message?.id==='points'?Number(String(t.message.rewardRate).replace(/X$/i,'')):null;
   const seen=new Set(), entries=[];
   try { for(const t of transactions){
     if(String(t.status).toUpperCase()!=='POSTED')continue;
@@ -219,7 +226,7 @@ export function estimateFromRewardRates({product,transactions,statementStart,sta
     if(!value)continue;
     const current=date>=statementStart&&date<=statementEnd;
     if(current&&t.statementEndDate&&String(t.statementEndDate).slice(0,10)!==statementEnd)return unavailable('STATEMENT_DATE_CONFLICT');
-    entries.push({t,date,current,value,type,rate:rate(t),merchant:merchant(t)});
+    entries.push({t,date,current,value,type,rate:activityRewardRate(t),merchant:merchant(t)});
   }}catch{return unavailable('INVALID_AMOUNT');}
   const current=entries.filter(e=>e.current);
   if(!current.length)return {points:0,reason:''};
@@ -228,6 +235,8 @@ export function estimateFromRewardRates({product,transactions,statementStart,sta
   const family=merchant=>{for(const name of ['DELL','NEWEGG','MSI'])if(new RegExp(`\\b${name}`).test(merchant))return name;return merchant;};
   const grossUpper=entries.filter(e=>e.type==='DEBIT').reduce((s,e)=>s+e.value,0);
   for(const refund of current.filter(e=>e.type==='CREDIT')){
+    const points=transactionPoints?.get(refund.t.identifier);
+    if(Number.isSafeInteger(points)){refundPoints-=points;continue;}
     // A partial refund can be valued without inventing an exact original ID
     // only when the complete card lifetime is present, the cap cannot bind,
     // and EVERY possible prior purchase at this retailer has the same rate.
@@ -271,7 +280,7 @@ export function estimateFromRewardRates({product,transactions,statementStart,sta
     if(product==='bp'&&category)return BP.has(category);
     return null;
   }
-  let known=0,unknown=0,refunds=0,base=0,bonus=0,higher=0;
+  let known=0,unknown=0,refunds=0,base=0,bonus=0,higher=0,unallocatedSpend=0;
   const bonusEntries=[];
   for(const e of entries){
     if(!e.current){
@@ -280,13 +289,21 @@ export function estimateFromRewardRates({product,transactions,statementStart,sta
       continue;
     }
     if(e.type==='CREDIT')continue;
+    const points=transactionPoints?.get(e.t.identifier);
+    if(e.rate===null&&Number.isSafeInteger(points)){
+      base+=points;
+      const knownBase = points === Math.round(e.value / 100) && rewardCategory(e.t) === 'other'
+        && (product === 'bg' || e.value < 500000);
+      if (!knownBase) unallocatedSpend+=e.value;
+      continue;
+    }
     base+=Math.round(e.value/100);
     if(e.rate>1&&e.rate!==bonusRate){higher+=Math.round(e.value/100)*(e.rate-1);continue;}
     const eligible=eligibility(e);
     if(eligible===null)return unavailable('CURRENT_BONUS_ELIGIBILITY_UNRESOLVED');
     if(eligible){bonus+=e.value;bonusEntries.push(e);}
   }
-  const minimumRemaining=Math.max(0,limit-known-unknown);
+  const minimumRemaining=Math.max(0,limit-known-unknown-unallocatedSpend);
   const maximumRemaining=Math.max(0,limit-Math.max(0,known-refunds));
   const calculate=remaining=>{let result=base+higher-refundPoints;for(const e of bonusEntries.sort((a,b)=>a.date.localeCompare(b.date)||a.t.identifier.localeCompare(b.t.identifier))){const allocation=Math.min(remaining,e.value);remaining-=allocation;result+=Math.round(allocation/100)*(bonusRate-1);}return result;};
   const low=calculate(minimumRemaining),high=calculate(maximumRemaining);
@@ -327,20 +344,63 @@ export function combinePendingEstimate(originalPending, billedPending, originalU
 
 const MR_REWARD_RETRY_DELAYS_MS = [2_000, 10_000, 30_000];
 
-class MrPendingFallback extends Error {}
+export async function readQualifiedRewardTransactions(readPage) {
+  const records = [];
+  let expectedCount;
+  for (let offset = 0, page = 0; page < 100; page++) {
+    const result = await readPage({ productType: 'AEXP_CARD_ACCOUNT', category: 'REWARD', transactionsFor: 'LOYALTY_ACCOUNT', period: 'P2M', offset, limit: 100 });
+    const count = result.metadata?.totalRecords;
+    const rows = result.transactions;
+    if (page === 0 && count === 0 && Array.isArray(rows) && !rows.length && ['0000', '0004'].includes(result.status?.code)) return [];
+    if (result.status?.code !== '0000' || !Number.isSafeInteger(count) || !Array.isArray(rows) || !rows.length) throw Error('MR_REWARD_TRANSACTIONS_INCOMPLETE');
+    expectedCount ??= count;
+    if (count !== expectedCount) break;
+    records.push(...rows);
+    if (records.length === count) return records;
+    if (records.length > count) break;
+    offset = result.metadata.nextIndex > offset ? result.metadata.nextIndex : offset + rows.length;
+  }
+  throw Error('MR_REWARD_TRANSACTIONS_INCOMPLETE');
+}
+
+function pointsForTransactions(input, rewards) {
+  const candidates = new Map();
+  for (const reward of rewards) {
+    if (!reward.id || reward.category !== 'REWARD' || !['BASE', 'ACCELERATED'].includes(reward.type) || reward.status !== 'QUALIFIED') continue;
+    candidates.set(reward.id, candidates.has(reward.id) ? null : reward);
+  }
+  const matches = new Map();
+  for (const t of input.transactions) {
+    const reward = candidates.get(t.identifier);
+    if (!reward || activityRewardRate(t) !== null || String(t.status).toUpperCase() !== 'POSTED' || t.transactionAmount?.currency !== 'USD') continue;
+    const date = statementDate(t.postDate || t.displayDate || t.chargeDate);
+    if (!date || date < input.statementStart || date > input.now || rewardCategory(t) === 'excluded') continue;
+    const rewardDate = statementDate(reward.postedDate);
+    if (!rewardDate || ![t.chargeDate, t.postDate, t.displayDate].some(value => statementDate(value) === rewardDate)) continue;
+    const type = String(t.type).toUpperCase();
+    if (!['DEBIT', 'CREDIT'].includes(type)) continue;
+    const amount = Number(t.transactionAmount.amount);
+    const sign = type === 'DEBIT' ? 1 : -1;
+    const points = reward.rewardAmount?.value;
+    if (!Number.isFinite(amount) || reward.baseAmount?.value !== sign * Math.round(Math.abs(amount))
+        || reward.rewardAmount?.currencyCode !== 'MR' || reward.rewardAmount?.currencyType !== 'POINTS'
+        || !Number.isSafeInteger(points) || sign * points < 0) continue;
+    matches.set(t.identifier, points);
+  }
+  return matches;
+}
 
 function loyaltyPendingRequest(accountToken) {
   return {accountToken,productType:'AEXP_CARD_ACCOUNT',period:'P6M',transactionStatus:['PENDING','QUALIFIED'],category:['REWARD'],summariesBy:['category','transactionStatus'],periodType:'CALENDAR_PERIOD',summariesFor:'LOYALTY_ACCOUNT'};
 }
 
-export async function readTotalEstimatedMrPending(cards, originalPending, { readActivity, readBreakdown, log, audit, onFallback = log }) {
+export async function readTotalEstimatedMrPending(cards, originalPending, { readActivity, readVitals, readRewards, readBreakdown, log, audit, onFallback = log }) {
   const basic = [...new Map(cards.filter(c => !c.relationship || c.relationship === 'BASIC').map(c => [c.account_token,c])).values()];
   const supported = basic.filter(c => /_(?:bg|bp)_/.test(c.card));
   if (!Number.isFinite(originalPending)) return '';
   if (!supported.length) return originalPending;
   try {
-    const recalculated = await readEstimatedMrPending(supported, { readActivity, log, audit });
-    if (recalculated === '') return '';
+    const recalculated = await readEstimatedMrPending(supported, { readActivity, readVitals, readRewards, log, audit });
     const accountToken = basic[0]?.account_token;
     if (!accountToken) throw Error('PENDING_BREAKDOWN_TOKEN_UNAVAILABLE');
     const {billed,unbilled} = pendingBreakdown(await readBreakdown(loyaltyPendingRequest(accountToken)));
@@ -349,18 +409,16 @@ export async function readTotalEstimatedMrPending(cards, originalPending, { read
     if (total === '') throw Error('PENDING_BREAKDOWN_RECONCILIATION_FAILED');
     return total;
   } catch(error) {
-    if (error instanceof MrPendingFallback) {
-      onFallback(`MR est pending uses Amex pending for ${error.message}`);
-      return originalPending;
-    }
-    log(`est pending total unavailable: ${error.message}`);
-    return '';
+    onFallback(`MR est pending uses Amex pending for ${error.message}`);
+    return originalPending;
   }
 }
 
+const rewardEvidenceReasons = new Set(['CURRENT_BONUS_ELIGIBILITY_UNRESOLVED', 'BONUS_ELIGIBILITY_UNRESOLVED', 'ANNUAL_BONUS_CAP_UNCERTAIN']);
+
 export async function retryMrRewardEvidence(input, reread, onRetry, wait = delay => new Promise(resolve => setTimeout(resolve, delay))) {
   let result = estimateUnbilledPoints(input);
-  if (!["CURRENT_BONUS_ELIGIBILITY_UNRESOLVED", "BONUS_ELIGIBILITY_UNRESOLVED"].includes(result.reason)) {
+  if (!rewardEvidenceReasons.has(result.reason)) {
     return { input, result, unresolved: false };
   }
 
@@ -371,30 +429,78 @@ export async function retryMrRewardEvidence(input, reread, onRetry, wait = delay
     if (transactions === null) continue;
     input = { ...input, transactions: mergeTransactionEvidence(input.transactions, transactions) };
     result = estimateUnbilledPoints(input);
-    if (result.points !== null) return { input, result, unresolved: false };
+    if (!rewardEvidenceReasons.has(result.reason)) return { input, result, unresolved: false };
   }
   return { input, result, unresolved: true };
 }
 
-async function readEstimatedMrPending(selected, { readActivity, log, audit }) {
+function statementDate(value) {
+  const date = String(value ?? '').slice(0, 10);
+  return /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : '';
+}
+
+function statementEvidence(vitals, today) {
+  const reported = Array.isArray(vitals?.statementPeriods) ? vitals.statementPeriods : [];
+  const periods = reported.map(period => ({ start: statementDate(period?.statementStartDate), end: statementDate(period?.statementEndDate) }));
+  const charges = vitals?.balanceCreditDetails?.balanceDetails?.recentChargesData;
+  const balancePeriod = { start: statementDate(charges?.billingCycleStartDate), end: statementDate(charges?.billingCycleEndDate) };
+  const valid = period => period.start && period.end && period.start <= period.end;
+  const current = [...periods, balancePeriod].find(period => valid(period) && period.start <= today && today <= period.end);
+  if (current) return { current };
+  const latest = periods.filter(valid).sort((a, b) => b.end.localeCompare(a.end))[0];
+  if (latest && latest.start === balancePeriod.start && latest.end === balancePeriod.end && latest.end < today
+      && Date.parse(today) - Date.parse(latest.end) === 86_400_000) return { justClosed: latest.end };
+  return {};
+}
+
+async function readEstimatedMrPending(selected, { readActivity, readVitals, readRewards, log, audit }) {
   let total = 0;
+  let rewards;
   for (const card of selected) {
     try {
-      const vitals = card.mr_vitals;
       const today = mrAccountDate();
       const year = Number(today.slice(0,4));
-      const periods = Array.isArray(vitals?.statementPeriods) ? vitals.statementPeriods : [];
-      const period = periods.find(p => {
-        const start = String(p?.statementStartDate ?? '').slice(0, 10);
-        const end = String(p?.statementEndDate ?? '').slice(0, 10);
-        return /^\d{4}-\d{2}-\d{2}$/.test(start) && /^\d{4}-\d{2}-\d{2}$/.test(end) && start <= today && today <= end;
-      });
-      if (!period) throw new MrPendingFallback(`${card.card} CURRENT_STATEMENT_UNAVAILABLE`);
-      if (String(period.statementStartDate).slice(0,4) !== String(year)) throw new Error('CURRENT_YEAR_STATEMENT_UNAVAILABLE');
+      let evidence = statementEvidence(card.mr_vitals, today);
+      if (!evidence.current && readVitals) {
+        try {
+          evidence = statementEvidence(await readVitals(card.account_token), today);
+        } catch { log(`could not reread statement period for ${card.card}`); }
+      }
+      const period = evidence.current;
+      const product = card.card.split('_')[1];
       const readCardActivity = () => readActivity(card.account_token, year);
+      if (!period) {
+        if (evidence.justClosed) {
+          const transactions = await readCardActivity();
+          const hasUnverifiedPosted = transactions.some(t => {
+            if (String(t.status).toUpperCase() !== 'POSTED') return false;
+            const date = statementDate(t.postDate || t.displayDate || t.chargeDate);
+            return !date || date > evidence.justClosed || statementDate(t.statementEndDate) > evidence.justClosed;
+          });
+          if (!hasUnverifiedPosted) {
+            await audit?.(card, { product, transactions, lastStatementEnd: evidence.justClosed, year, now: today }, { points: 0, reason: '', audit: { noPostedActivityAfterClose: true } });
+            continue;
+          }
+        }
+        throw new Error('CURRENT_STATEMENT_UNAVAILABLE');
+      }
+      if (period.start.slice(0, 4) !== String(year)) throw new Error('CURRENT_YEAR_STATEMENT_UNAVAILABLE');
       const transactions = await readCardActivity();
-      const { input, result, unresolved } = await retryMrRewardEvidence(
-        { product: card.card.split('_')[1], transactions, statementStart: period.statementStartDate.slice(0,10), statementEnd: period.statementEndDate.slice(0,10), year, openedDate:card.open_date, now: today },
+      const calculation = { product, transactions, statementStart: period.start, statementEnd: period.end, year, openedDate:card.open_date, now: today };
+      if (readRewards && transactions.some(t => {
+        const date = statementDate(t.postDate || t.displayDate || t.chargeDate);
+        return String(t.status).toUpperCase() === 'POSTED' && date >= period.start && date <= today
+          && activityRewardRate(t) === null && rewardCategory(t) !== 'excluded';
+      })) {
+        rewards ??= Promise.resolve().then(readRewards).catch(() => {
+          log('MR transaction points unavailable from loyalty activity');
+          return [];
+        });
+        calculation.transactionPoints = pointsForTransactions(calculation, await rewards);
+        if (calculation.transactionPoints.size) log(`MR matched ${calculation.transactionPoints.size} transaction point record(s) for ${card.card}`);
+      }
+      const { input, result } = await retryMrRewardEvidence(
+        calculation,
         () => readCardActivity().catch(() => {
           log(`could not reread reward evidence for ${card.card}`);
           return null;
@@ -402,13 +508,10 @@ async function readEstimatedMrPending(selected, { readActivity, log, audit }) {
         (attempt, maxAttempts, delay) => log(`retrying missing reward evidence for ${card.card} (${attempt}/${maxAttempts}) in ${delay}ms`),
       );
       await audit?.(card, input, result);
-      if (unresolved) throw new MrPendingFallback(`${card.card} ${result.reason}`);
       if (result.points === null) throw new Error(result.reason);
       total += result.points;
     } catch(error) {
-      if (error instanceof MrPendingFallback) throw error;
-      log(`est pending unavailable for ${card.card}: ${error.message}`);
-      return '';
+      throw new Error(`${card.card} ${error.message}`, { cause: error });
     }
   }
   return total;

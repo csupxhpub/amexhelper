@@ -173,7 +173,7 @@ acc no,cards,mr account,earned,all redeemed,airlines redeemed,35% redeem left,pe
 | `mr account` | MR 账号。 |
 | `earned` | 已获得积分。 |
 | `all redeemed` | Dashboard 的 `loyaltyBalances.used`。 |
-| `est pending` | 已出账单待到账积分 + BG、BP 未出账单重算积分；从原 pending 中替换已包含的 QUALIFIED 部分，避免重复累计，并以原 pending 为下限。BG 年度 $150,000 上限按 4x／1x，BP 年度 $2,000,000 上限按 2x／1x。拆分、分类或退款证据不足时留空。 |
+| `est pending` | 已出账单待到账积分 + BG、BP 未出账单重算积分；从原 pending 中替换已包含的 QUALIFIED 部分，避免重复累计，并以原 pending 为下限。BG 年度 $150,000 上限按 4x／1x，BP 年度 $2,000,000 上限按 2x／1x。拆分、分类或退款证据不足时使用 Dashboard 的原始 pending。 |
 | `airlines redeemed` | `all redeemed - 当年已入账航司转点净额`；名称保留当前 CSV 接口，差额不是精确的合资格机票兑换额。 |
 | `35% redeem left` | `max(0, round(1000000 / 0.35 - airlines redeemed))` 的估计值；转点明细或 token 不可用、分类未知或总额不一致时留空。 |
 | `pending` | Pending 积分。 |
@@ -181,7 +181,7 @@ acc no,cards,mr account,earned,all redeemed,airlines redeemed,35% redeem left,pe
 
 MR CSV 最后一行为 `total`，汇总 `earned`、`pending`、`est pending` 和 `balance`；任一组成行的 `est pending` 不可用时，其估值合计留空，不把未知当作 0。没有 Business Platinum 卡时，`cards` 显示 `NA`；Business Platinum 未登记航司时，`airline code` 显示 `NULL`。航司转点从 `ReadLoyaltyTransactions.v3` 分页读取，只累计当年已入账且属于已知航司的净转点，去重并抵减冲回；详细口径见 [Data Fetcher](skills/amex-data-fetcher/README.md)。
 
-命令行和油猴都会重试缺少倍率或奖励资格证据的交易。重试后仍无法确认，或 Vitals 没有覆盖当前日期的有效账期时，MR CSV 照常导出，受影响 MR 账户的 `est pending` 使用 Amex Dashboard 的 `pending`，并显示回退提示。
+命令行和油猴都会重试缺少倍率或奖励资格证据的交易。换账期时会核对同卡的 Vitals 账期和已入账交易。重算或对账仍无法完成时，MR CSV 照常导出，受影响账户的 `est pending` 使用 Amex Dashboard 的 `pending`，并显示回退提示。
 
 Benefits CSV：
 
