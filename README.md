@@ -181,7 +181,7 @@ acc no,cards,mr account,earned,all redeemed,airlines redeemed,35% redeem left,pe
 
 MR CSV 最后一行为 `total`，汇总 `earned`、`pending`、`est pending` 和 `balance`；任一组成行的 `est pending` 不可用时，其估值合计留空，不把未知当作 0。没有 Business Platinum 卡时，`cards` 显示 `NA`；Business Platinum 未登记航司时，`airline code` 显示 `NULL`。航司转点从 `ReadLoyaltyTransactions.v3` 分页读取，只累计当年已入账且属于已知航司的净转点，去重并抵减冲回；详细口径见 [Data Fetcher](skills/amex-data-fetcher/README.md)。
 
-命令行和油猴以核对过的 BG 逐笔 `QUALIFIED` 积分为基线。v3 返回 1X 时，结合本期商户类别排名和年度剩余额度判断能否上调，历史同商户的 4X 可佐证分类。缺少倍率或分类时仅补读当前账期，年度额度证据不足时才补读全年。日志区分重算结果等于原值和估值回退，MR CSV 照常导出。
+命令行和油猴以核对过的 BG 逐笔 `QUALIFIED` 积分为基线。v3 返回 1X 时，结合本期商户类别排名和年度剩余额度判断能否上调，历史同商户的 4X 可佐证分类。本期 Pay With Points 贷记计入 v3 核实的积分调整，无法核实时保留 Dashboard pending。缺少倍率或分类时仅补读当前账期，年度额度证据不足时才补读全年。日志区分重算结果等于原值和估值回退，MR CSV 照常导出。
 
 Benefits CSV：
 

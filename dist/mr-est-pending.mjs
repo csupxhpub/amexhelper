@@ -109,13 +109,23 @@ export function unbilledPointsUpperBound({product,transactions,statementStart,st
   return upper;
 }
 
-function excludeConfirmedTravelRedemptions(transactions, now) {
+function isPayWithPointsCredit(transaction) {
+  return String(transaction.type).toUpperCase() === 'CREDIT'
+    && String(transaction.displayDescription || transaction.description || '').trim().toUpperCase() === 'AMEX TRAVEL PAY WITH POINTS CREDIT';
+}
+
+function postedInStatement(transaction, { statementStart, now }) {
+  const date = statementDate(transaction.postDate || transaction.displayDate || transaction.chargeDate);
+  return String(transaction.status).toUpperCase() === 'POSTED' && date >= statementStart && date <= now;
+}
+
+function excludeConfirmedTravelRedemptions(transactions, now, transactionPoints) {
   const pairs = new Map();
   for (const transaction of transactions) {
     const description = String(transaction.displayDescription || transaction.description || '').trim().toUpperCase();
     const type = String(transaction.type).toUpperCase();
     const debit = type === 'DEBIT' && description === 'PWP AMERICAN EXPRPHOENIX AZ';
-    const credit = type === 'CREDIT' && description === 'AMEX TRAVEL PAY WITH POINTS CREDIT';
+    const credit = isPayWithPointsCredit(transaction);
     if ((!debit && !credit) || String(transaction.status).toUpperCase() !== 'POSTED'
         || !transaction.identifier || !transaction.chargeDate || !transaction.statementEndDate
         || !transaction.postDate || transaction.postDate.slice(0, 10) > now
@@ -131,6 +141,8 @@ function excludeConfirmedTravelRedemptions(transactions, now) {
   const excluded = new Set();
   for (const {debits, credits} of pairs.values()) {
     if (debits.length === 1 && credits.length === 1 && debits[0].message?.id !== 'points'
+        && !(transactionPoints?.get(debits[0].identifier) > 0)
+        && !(transactionPoints?.get(credits[0].identifier) < 0)
         && debits[0].identifier !== credits[0].identifier) excluded.add(debits[0]);
   }
   return transactions.filter(transaction => !excluded.has(transaction));
@@ -140,9 +152,27 @@ export function estimateUnbilledPoints({ product, transactions, statementStart, 
   if (!['bg', 'bp'].includes(product)) return { points: null, reason: 'UNSUPPORTED_PRODUCT' };
   if (!/^\d{4}-\d{2}-\d{2}$/.test(statementStart || '') || !/^\d{4}-\d{2}-\d{2}$/.test(statementEnd || '')
       || statementStart > now || statementEnd < now || statementStart > statementEnd) return { points: null, reason: 'CURRENT_STATEMENT_UNAVAILABLE' };
-  transactions = excludeConfirmedTravelRedemptions(transactions, now);
+  let payWithPointsAdjustment = 0;
+  const seenCredits = new Set();
+  for (const transaction of transactions) {
+    if (!isPayWithPointsCredit(transaction) || !postedInStatement(transaction, { statementStart, now })) continue;
+    const points = transactionPoints?.get(transaction.identifier);
+    if (!Number.isSafeInteger(points) || points > 0
+        || (transaction.statementEndDate && statementDate(transaction.statementEndDate) !== statementEnd)) {
+      return { points: null, reason: 'PWP_REWARD_ADJUSTMENT_UNVERIFIED' };
+    }
+    if (seenCredits.has(transaction.identifier)) continue;
+    seenCredits.add(transaction.identifier);
+    payWithPointsAdjustment += points;
+  }
+  transactions = excludeConfirmedTravelRedemptions(transactions, now, transactionPoints);
   if (transactionPoints?.size || transactions.some(t => activityRewardRate(t) !== null)) {
-    return estimateFromRewardRates({product,transactions,statementStart,statementEnd,year,openedDate,now,transactionPoints,projectableBase});
+    const result = estimateFromRewardRates({product,transactions,statementStart,statementEnd,year,openedDate,now,transactionPoints,projectableBase});
+    if (result.points !== null && seenCredits.size) {
+      result.points += payWithPointsAdjustment;
+      result.audit = { ...result.audit, payWithPointsAdjustment };
+    }
+    return result;
   }
   const seen = new Set(), entries = [];
   try {
@@ -432,10 +462,9 @@ function pointsForTransactions(input, rewards) {
   const projectableBase = new Set();
   for (const t of input.transactions) {
     const reward = candidates.get(t.identifier);
-    if (!reward || (input.product !== 'bg' && activityRewardRate(t) !== null)
-        || String(t.status).toUpperCase() !== 'POSTED' || t.transactionAmount?.currency !== 'USD') continue;
-    const date = statementDate(t.postDate || t.displayDate || t.chargeDate);
-    if (!date || date < input.statementStart || date > input.now || rewardCategory(t) === 'excluded') continue;
+    const redemptionCredit = isPayWithPointsCredit(t);
+    if (!reward || !postedInStatement(t, input) || t.transactionAmount?.currency !== 'USD'
+        || (!redemptionCredit && (rewardCategory(t) === 'excluded' || (input.product !== 'bg' && activityRewardRate(t) !== null)))) continue;
     const rewardDate = statementDate(reward.postedDate);
     if (!rewardDate || ![t.chargeDate, t.postDate, t.displayDate].some(value => statementDate(value) === rewardDate)) continue;
     const type = String(t.type).toUpperCase();
@@ -443,7 +472,9 @@ function pointsForTransactions(input, rewards) {
     const amount = Number(t.transactionAmount.amount);
     const sign = type === 'DEBIT' ? 1 : -1;
     const points = reward.rewardAmount?.value;
-    if (!Number.isFinite(amount) || reward.baseAmount?.value !== sign * Math.round(Math.abs(amount))
+    const baseMatches = reward.baseAmount?.value === sign * Math.round(Math.abs(amount))
+      || (redemptionCredit && reward.baseAmount?.value === 0 && points === 0);
+    if (!Number.isFinite(amount) || !baseMatches
         || reward.rewardAmount?.currencyCode !== 'MR' || reward.rewardAmount?.currencyType !== 'POINTS'
         || !Number.isSafeInteger(points) || sign * points < 0) continue;
     matches.set(t.identifier, points);
@@ -560,11 +591,8 @@ async function readEstimatedMrPending(selected, { readActivity, rereadAnnualActi
       if (period.start.slice(0, 4) !== String(year)) throw new Error('CURRENT_YEAR_STATEMENT_UNAVAILABLE');
       const transactions = await readCardActivity();
       const calculation = { product, transactions, statementStart: period.start, statementEnd: period.end, year, openedDate:card.open_date, now: today };
-      if (readRewards && transactions.some(t => {
-        const date = statementDate(t.postDate || t.displayDate || t.chargeDate);
-        return String(t.status).toUpperCase() === 'POSTED' && date >= period.start && date <= today
-          && (product === 'bg' || activityRewardRate(t) === null) && rewardCategory(t) !== 'excluded';
-      })) {
+      if (readRewards && transactions.some(t => postedInStatement(t, calculation)
+        && (isPayWithPointsCredit(t) || ((product === 'bg' || activityRewardRate(t) === null) && rewardCategory(t) !== 'excluded')))) {
         rewards ??= Promise.resolve().then(readRewards).catch(() => {
           log('MR transaction points unavailable from loyalty activity');
           return [];
